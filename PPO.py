@@ -50,18 +50,20 @@ class ActorCritic(nn.Module):
             state_value = self.critic(state).detach()
 
         return action, action_log_prob, state_value
-    
+
     def evaluate(self, state, action):
 
         # the evaluate function is not detached 
 
         action_probs = self.actor(state)
         dist = Categorical(action_probs)
+
+        # the log_prob function should be called with a tensor
         action_log_prob = dist.log_prob(action)
         dist_entropy = dist.entropy()
         state_value = self.critic(state)
 
-        return action_log_prob, state_value, dist_entropy
+        return state_value, action_log_prob, dist_entropy
     
 class PPO:
     def __init__(self, state_dim, action_dim, actor_lr, critic_lr, gamma, 
@@ -123,7 +125,7 @@ class PPO:
         for _ in range(self.K_epochs):
 
             # not detached
-            log_probs, state_values, dis_entropy = self.policy.evaluate(old_states, old_actions)
+            state_values, log_probs, dis_entropy = self.policy.evaluate(old_states, old_actions)
             state_values = torch.squeeze(state_values)  
             
             ratios = torch.exp(log_probs - old_logprobs)
@@ -131,6 +133,7 @@ class PPO:
             surr2 = torch.clamp(ratios, 1 - self.eps_clip, 1 + self.eps_clip) * advantage
             
             loss = -torch.min(surr1, surr2) + 0.5 * self.MSELoss(state_values, rewards) - 0.01 * dis_entropy
+
             self.optimizer.zero_grad()
             loss.mean().backward()
             self.optimizer.step()
@@ -142,5 +145,7 @@ class PPO:
         torch.save(self.policy.state_dict(), path)
 
     def load(self, path):
+
+        # map_location: load the data to the original device
         self.old_policy.load_state_dict(torch.load(path, map_location=lambda storage, loc: storage))
         self.policy.load_state_dict(torch.load(path, map_location=lambda storage, loc: storage))
