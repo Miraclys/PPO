@@ -5,10 +5,12 @@ import torch
 import numpy as np
 import gymnasium as gym
 from tqdm import tqdm
+import logging
 
 from PPO import PPO
 
 def eval_model(epoch):
+
     env_name = 'CartPole-v1'
     env = gym.make(env_name)
     state_dim = env.observation_space.shape[0]
@@ -56,6 +58,10 @@ def train():
 
     random_seed = 0
 
+    logging.basicConfig(level=logging.INFO, 
+                        filename='train.log',
+                        filemode='w')
+
     env = gym.make(env_name)
     state_dim = env.observation_space.shape[0]
     action_dim = env.action_space.n
@@ -97,7 +103,8 @@ def train():
                 ppo_agent.update()
                 ppo_agent.save(f"./models/ppo_{epoch}.pkl")
                 reward_mean = eval_model(epoch)
-                print(f'Epoch {epoch}, train reward: {current_ep_reward}, test reward: {reward_mean}')
+                # print(f'Epoch {epoch}, train reward: {current_ep_reward}, test reward: {reward_mean}')s
+                logging.info(str(epoch) + '\t' + str(current_ep_reward) + '\t' + str(reward_mean))
 
             if done:
                 break
