@@ -6,7 +6,7 @@ def moving_average(data, window_size):
     return np.convolve(data, np.ones(window_size)/window_size, mode='valid')
 
 reard_list = []
-file = './train.log'
+file = './origin_train.log'
 
 with open(file, 'r') as f:
     for line in f:
