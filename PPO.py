@@ -21,17 +21,35 @@ class RolloutBuffer:
         del self.is_terminals[:]
         
 class ActorCritic(nn.Module):
-    def __init__(self, state_dim, action_dim):
+    def __init__(self, state_dim, action_dim, 
+                 continuous_action_space, action_std_init):
         super(ActorCritic, self).__init__()
 
-        self.actor = nn.Sequential(
-            nn.Linear(state_dim, 64),
-            nn.Tanh(),
-            nn.Linear(64, 64),
-            nn.Tanh(),
-            nn.Linear(64, action_dim),
-            nn.Softmax(dim=-1)
-        )
+        self.continuous_action_space = continuous_action_space  
+
+        if self.continuous_action_space:
+            self.action_dim = action_dim
+            self.action_var = torch.full((action_dim,), 
+                                        action_std_init * action_std_init)
+
+        if self.continuous_action_space:
+            self.actor = nn.Sequential(
+                nn.Linear(state_dim, 64),
+                nn.Tanh(),
+                nn.Linear(64, 64),
+                nn.Tanh(),
+                nn.Linear(64, action_dim),
+                nn.Tanh()
+            )
+        else:
+            self.actor = nn.Sequential(
+                nn.Linear(state_dim, 64),
+                nn.Tanh(),
+                nn.Linear(64, 64),
+                nn.Tanh(),
+                nn.Linear(64, action_dim),
+                nn.Softmax(dim=-1)
+            )
 
         self.critic = nn.Sequential(
             nn.Linear(state_dim, 64),
@@ -41,10 +59,22 @@ class ActorCritic(nn.Module):
             nn.Linear(64, 1)
         )
 
+    def set_action_std(self, new_action_std):
+        if self.continuous_action_space:
+            self.action_var = torch.full((self.action_dim,), 
+                                        new_action_std * new_action_std)
+
     def action(self, state):
         with torch.no_grad():
-            action_probs = self.actor(state).detach()
-            dist = Categorical(action_probs)
+            if self.continuous_action_space:
+                action_mean = self.actor(state).detach()
+                # use unsqueeze to add a dimension
+                cov_mat = torch.diag(self.action_var).unsqueeze(dim=0)
+                dist = MultivariateNormal(action_mean, cov_mat)
+            else:
+                action_probs = self.actor(state).detach()
+                dist = Categorical(action_probs)
+
             action = dist.sample()
             action_log_prob = dist.log_prob(action).detach()
             state_value = self.critic(state).detach()
@@ -53,10 +83,19 @@ class ActorCritic(nn.Module):
 
     def evaluate(self, state, action):
 
-        # the evaluate function is not detached 
+        if self.continuous_action_space:
 
-        action_probs = self.actor(state)
-        dist = Categorical(action_probs)
+            action_mean = self.actor(state)
+            action_var = self.action_var.expand_as(action_mean)
+            cov_mat = torch.diag_embed(action_var)
+            dist = MultivariateNormal(action_mean, cov_mat)
+
+            if self.action_dim == 1:
+                action = action.reshape(-1, self.action_dim)
+        else:
+            # the evaluate function is not detached 
+            action_probs = self.actor(state)
+            dist = Categorical(action_probs)
 
         # the log_prob function should be called with a tensor
         action_log_prob = dist.log_prob(action)
@@ -66,17 +105,24 @@ class ActorCritic(nn.Module):
         return state_value, action_log_prob, dist_entropy
     
 class PPO:
+
     def __init__(self, state_dim, action_dim, actor_lr, critic_lr, gamma, 
-                 K_epochs, eps_clip):
+                 K_epochs, eps_clip, continuous_action_space, action_std):
+        
         self.state_dim = state_dim
         self.action_dim = action_dim
         self.gamma = gamma
         self.eps_clip = eps_clip
         self.K_epochs = K_epochs
+        self.continuous_action_space = continuous_action_space
+        
+        if continuous_action_space:
+            self.action_std = action_std
 
         self.buffer = RolloutBuffer()
 
-        self.policy = ActorCritic(state_dim, action_dim)
+        self.policy = ActorCritic(state_dim, action_dim, 
+                                  continuous_action_space, action_std)
 
         # update actor and critic jointly
         self.optimizer = torch.optim.Adam([
@@ -84,25 +130,63 @@ class PPO:
             {'params': self.policy.critic.parameters(), 'lr': critic_lr}
         ])
 
-        self.old_policy = ActorCritic(state_dim, action_dim)
+        self.old_policy = ActorCritic(state_dim, action_dim, 
+                                      continuous_action_space, action_std)
         self.old_policy.load_state_dict(self.policy.state_dict())
 
         self.MSELoss = nn.MSELoss()
 
+    def set_action_std(self, new_action_std):
+        if self.continuous_action_space:
+            self.action_std = new_action_std
+            self.policy.set_action_std(new_action_std)
+            self.old_policy.set_action_std(new_action_std)
+
+    def decay_action_std(self, action_std_decay_rate, min_action_std):
+        if self.continuous_action_space:
+
+            self.action_std = self.action_std - action_std_decay_rate
+            self.action_std = round(self.action_std, 4)
+
+            if (self.action_std <= min_action_std):
+                self.action_std = min_action_std
+                print("setting actor output action_std to min_action_std : ", self.action_std)
+            else:
+                print("setting actor output action_std to : ", self.action_std)
+            self.set_action_std(self.action_std)
+
     def select_action(self, state):
-        with torch.no_grad():
-            state = torch.FloatTensor(state)
-            # action, action_log_probs, state_value = self.old_policy.action(state)
-            action, action_log_probs, state_value = self.policy.action(state)
+    
+        if self.continuous_action_space:
 
-        self.buffer.states.append(state)
-        self.buffer.actions.append(action)
-        self.buffer.log_probs.append(action_log_probs)
-        self.buffer.state_values.append(state_value)
+            with torch.no_grad():
+                state = torch.FloatTensor(state)
+                # need to change
+                # state = state.unsqueeze(0)
+                action, action_log_probs, state_value = self.old_policy.action(state)
+        
+            self.buffer.states.append(state)
+            self.buffer.actions.append(action)
+            self.buffer.log_probs.append(action_log_probs)
+            self.buffer.state_values.append(state_value)
 
-        return action.item()
+            return action.detach().numpy().flatten()
+        else:
+
+            with torch.no_grad():
+                state = torch.FloatTensor(state)
+                action, action_log_probs, state_value = self.old_policy.action(state)
+                # action, action_log_probs, state_value = self.policy.action(state)
+
+            self.buffer.states.append(state)
+            self.buffer.actions.append(action)
+            self.buffer.log_probs.append(action_log_probs)
+            self.buffer.state_values.append(state_value)
+
+            return action.item()
 
     def update(self):
+
         rewards = []
         discounted_reward = 0
         for reward, is_terminal in zip(reversed(self.buffer.rewards), reversed(self.buffer.is_terminals)):
