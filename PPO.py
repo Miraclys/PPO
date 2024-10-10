@@ -86,8 +86,9 @@ class ActorCritic(nn.Module):
         if self.continuous_action_space:
 
             action_mean = self.actor(state)
-            action_var = self.action_var.expand_as(action_mean)
-            cov_mat = torch.diag_embed(action_var)
+            # action_var = self.action_var.expand_as(action_mean)
+            # cov_mat = torch.diag_embed(action_var)
+            cov_mat = torch.diag(self.action_var).unsqueeze(dim=0)
             dist = MultivariateNormal(action_mean, cov_mat)
 
             if self.action_dim == 1:
@@ -170,6 +171,7 @@ class PPO:
             self.buffer.log_probs.append(action_log_probs)
             self.buffer.state_values.append(state_value)
 
+            # turn the (1, action_dim) action tensor to (action_dim, )
             return action.detach().numpy().flatten()
         else:
 

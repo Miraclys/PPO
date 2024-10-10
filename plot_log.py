@@ -6,14 +6,14 @@ def moving_average(data, window_size):
     return np.convolve(data, np.ones(window_size)/window_size, mode='valid')
 
 reard_list = []
-file = './origin_train.log'
+file = './train.log'
 
 with open(file, 'r') as f:
     for line in f:
         content = line.split('\t')
         reard_list.append(float(content[-1]))
 
-window_size = 5 
+window_size = 20
 
 smoothed_rewards = moving_average(reard_list, window_size)
 

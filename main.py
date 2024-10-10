@@ -76,7 +76,7 @@ def train():
     random_seed = 0
 
     logging.basicConfig(level=logging.INFO, 
-                        filename='change_PPO_train.log',
+                        filename='test_train.log',
                         filemode='w')
 
     env = gym.make(env_name)
